@@ -66,6 +66,9 @@ void GHOSTAudioProcessor::prepareToPlay(double sr, int)
 
     fastEnvelope = slowEnvelope = previousEnvelope = 0.0f;
     ghostState = 0.0f;
+    bandEnvelope.fill(0.0f);
+    bandGain.fill(1.0f);
+    dominantBand = 0;
     bodyL = bodyR = toneL = toneR = 0.0f;
 
     fastAttackCoeff = coeff(2.5f, currentSampleRate);
@@ -77,6 +80,25 @@ void GHOSTAudioProcessor::prepareToPlay(double sr, int)
     toneCoeff = alpha(2200.0f, currentSampleRate);
     ghostRiseCoeff = coeff(7.0f, currentSampleRate);
     ghostFallCoeff = coeff(180.0f, currentSampleRate);
+    bandAttackCoeff = coeff(8.0f, currentSampleRate);
+    bandReleaseCoeff = coeff(90.0f, currentSampleRate);
+    bandGainAttackCoeff = coeff(4.0f, currentSampleRate);
+    bandGainReleaseCoeff = coeff(70.0f, currentSampleRate);
+
+    const float bandFrequencies[numBands] = { 90.0f, 240.0f, 600.0f,
+                                               1500.0f, 3400.0f, 7600.0f };
+    for (int i = 0; i < numBands; ++i)
+    {
+        const float safeFrequency = juce::jmin(
+            bandFrequencies[i], static_cast<float>(currentSampleRate * 0.40));
+        const float q = (i == numBands - 1) ? 0.80f : 0.95f;
+        auto coefficients = juce::dsp::IIR::Coefficients<float>::makeBandPass(
+            currentSampleRate, safeFrequency, q);
+        bandL[static_cast<size_t>(i)].coefficients = coefficients;
+        bandR[static_cast<size_t>(i)].coefficients = coefficients;
+        bandL[static_cast<size_t>(i)].reset();
+        bandR[static_cast<size_t>(i)].reset();
+    }
 
     transientMeter.store(0.0f);
     bodyMeter.store(0.0f);
@@ -183,9 +205,10 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
         peakTail = juce::jmax(peakTail, tailState);
         peakG = juce::jmax(peakG, motion);
 
+        // Broad tonal components used as a stable fallback around the
+        // perceptual contrast bank.
         bodyL += bodyCoeff * (inL - bodyL);
         bodyR += bodyCoeff * (inR - bodyR);
-
         toneL += toneCoeff * (inL - toneL);
         toneR += toneCoeff * (inR - toneR);
 
@@ -196,22 +219,123 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
         const float highL = inL - toneL;
         const float highR = inR - toneR;
 
+        // --- Perceptual contrast bank ------------------------------------------------
+        // Measure six broad spectral regions, then identify the dominant one.
+        // GHOST boosts that region while temporarily reducing nearby masking bands.
+        float bandSum = 0.0f;
+        float strongest = 0.0f;
+        int strongestIndex = dominantBand;
+
+        std::array<float, numBands> bandSamplesL {};
+        std::array<float, numBands> bandSamplesR {};
+
+        for (int i = 0; i < numBands; ++i)
+        {
+            const auto index = static_cast<size_t>(i);
+            const float bl = bandL[index].processSample(inL);
+            const float br = bandR[index].processSample(inR);
+            bandSamplesL[index] = bl;
+            bandSamplesR[index] = br;
+
+            const float energy = 0.5f * (std::abs(bl) + std::abs(br));
+            auto& env = bandEnvelope[index];
+
+            if (energy > env)
+                env = bandAttackCoeff * env
+                    + (1.0f - bandAttackCoeff) * energy;
+            else
+                env = bandReleaseCoeff * env
+                    + (1.0f - bandReleaseCoeff) * energy;
+
+            bandSum += env;
+
+            if (env > strongest)
+            {
+                strongest = env;
+                strongestIndex = i;
+            }
+        }
+
+        dominantBand = strongestIndex;
+
+        const float uniformShare = 1.0f / static_cast<float>(numBands);
+        const float dominantShare = strongest / juce::jmax(bandSum, 1.0e-5f);
+        const float dominance = juce::jlimit(
+            0.0f, 1.0f,
+            (dominantShare - uniformShare) / (0.42f - uniformShare));
+
+        // When the spectrum is ambiguous, GHOST backs off instead of
+        // arbitrarily colouring the whole mix.
+        const float focusPulse =
+            juce::jlimit(0.0f, 1.0f,
+                transient * (0.45f + 0.85f * attack)
+                + ghostState * 0.25f)
+            * dominance;
+
+        std::array<float, numBands> desiredBandGain;
+        float totalCorrection = 0.0f;
+
+        for (int i = 0; i < numBands; ++i)
+        {
+            const float distance = std::abs(
+                static_cast<float>(i - dominantBand));
+
+            const float focusWeight =
+                std::exp(-1.25f * distance * distance);
+
+            const float shadowWeight =
+                distance > 2.5f ? 0.0f
+                                 : std::exp(-0.80f * distance * distance);
+
+            float correction =
+                + focusWeight * attack * focusPulse * 0.34f
+                - shadowWeight * tail * ghostState * 0.13f
+                - shadowWeight * focusPulse * 0.19f;
+
+            // A little extra high-frequency contrast makes the transient
+            // perceptually clearer without applying a static treble boost.
+            if (i == numBands - 1)
+                correction += air * focusPulse * 0.16f;
+
+            desiredBandGain[static_cast<size_t>(i)] =
+                juce::jlimit(0.68f, 1.42f, 1.0f + correction);
+
+            totalCorrection += desiredBandGain[static_cast<size_t>(i)] - 1.0f;
+        }
+
+        // Rough energy conservation: avoid the classic "it is just louder"
+        // impression by compensating the global correction across all bands.
+        const float compensation =
+            -0.55f * totalCorrection / static_cast<float>(numBands);
+
+        for (int i = 0; i < numBands; ++i)
+        {
+            const auto index = static_cast<size_t>(i);
+            const float target =
+                juce::jlimit(0.65f, 1.38f,
+                    desiredBandGain[index] + compensation);
+
+            auto& current = bandGain[index];
+            const float smoothing = target > current
+                ? bandGainAttackCoeff : bandGainReleaseCoeff;
+
+            current = smoothing * current
+                    + (1.0f - smoothing) * target;
+        }
+
         const float attackPulse = transient * (0.45f + 0.95f * ghost);
         const float bodyPulse = bodyState * (0.30f + 0.70f * ghost);
         const float tailPulse = tailState * (0.35f + 0.65f * ghost);
 
         const float transientBoost =
-            1.0f + attack * attackPulse * 1.45f;
-
+            1.0f + attack * attackPulse * 0.72f;
         const float bodyBoost =
-            1.0f + body * bodyPulse * 0.42f;
-
+            1.0f + body * bodyPulse * 0.28f;
         const float tailCut =
-            1.0f - tail * tailPulse * 0.48f;
-
+            1.0f - tail * tailPulse * 0.26f;
         const float airBoost =
-            1.0f + air * attackPulse * 2.10f
-                  - air * tailPulse * 0.45f;
+            1.0f + air * attackPulse * 1.10f
+                  - air * tailPulse * 0.20f;
 
         const float lowLProcessed = lowL * bodyBoost;
         const float lowRProcessed = lowR * bodyBoost;
@@ -233,17 +357,31 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
                 1.0f + width * (0.25f + 0.75f * ghostState)
                     * (1.70f * transient - 0.90f * tailState));
 
+            float spectralDeltaL = 0.0f;
+            float spectralDeltaR = 0.0f;
+
+            for (int i = 0; i < numBands; ++i)
+            {
+                const auto index = static_cast<size_t>(i);
+                spectralDeltaL += bandSamplesL[index]
+                                * (bandGain[index] - 1.0f);
+                spectralDeltaR += bandSamplesR[index]
+                                * (bandGain[index] - 1.0f);
+            }
+
             const float outL =
                 mid + sideLow
                 + 0.72f * midLProcessed
                 + sideMid * widthFactor
-                + highLProcessed;
+                + highLProcessed
+                + spectralDeltaL;
 
             const float outR =
                 mid - sideLow
                 + 0.72f * midRProcessed
                 - sideMid * widthFactor
-                + highRProcessed;
+                + highRProcessed
+                + spectralDeltaR;
 
             // Tiny dynamic saturation prevents the ghost response from feeling like
             // a static EQ move when the source has strong transient energy.
@@ -257,10 +395,16 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
         }
         else
         {
+            float spectralDelta = 0.0f;
+            for (int i = 0; i < numBands; ++i)
+                spectralDelta += bandSamplesL[static_cast<size_t>(i)]
+                               * (bandGain[static_cast<size_t>(i)] - 1.0f);
+
             const float out =
                 lowLProcessed
                 + 0.85f * midLProcessed
-                + highLProcessed;
+                + highLProcessed
+                + spectralDelta;
 
             const float drive = 1.0f + 1.35f * ghostState * transient;
             const float wet = std::tanh(out * drive) / std::tanh(drive);
