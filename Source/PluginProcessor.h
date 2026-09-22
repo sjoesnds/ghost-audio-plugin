@@ -54,9 +54,13 @@ private:
     std::array<float, numBands> bandGain {};
     int dominantBand = 0;
 
-    juce::dsp::DelayLine<float> ghostDelayL;
-    juce::dsp::DelayLine<float> ghostDelayR;
-    int ghostDelaySamples = 1;
+    // Two short reflection taps create the actual "ghost" spatial shadow.
+    juce::dsp::DelayLine<float> ghostDelayShortL;
+    juce::dsp::DelayLine<float> ghostDelayShortR;
+    juce::dsp::DelayLine<float> ghostDelayLongL;
+    juce::dsp::DelayLine<float> ghostDelayLongR;
+    int ghostShortDelaySamples = 1;
+    int ghostLongDelaySamples = 1;
     float ghostHaloL = 0.0f;
     float ghostHaloR = 0.0f;
     float haloAttackCoeff = 0.0f;
