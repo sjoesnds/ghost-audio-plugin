@@ -40,6 +40,8 @@ target_sources(GHOST
         Source/PluginEditor.h
 )
 
+juce_generate_juce_header(GHOST)
+
 target_compile_definitions(GHOST
     PRIVATE
         JUCE_WEB_BROWSER=0
