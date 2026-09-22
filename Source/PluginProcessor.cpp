@@ -89,8 +89,18 @@ void GHOSTAudioProcessor::prepareToPlay(double sr, int)
     haloReleaseCoeff = coeff(95.0f, currentSampleRate);
 
     ghostDelaySamples = juce::jmax(1, juce::roundToInt(0.011f * static_cast<float>(currentSampleRate)));
-    ghostDelayL.setMaximumDelayInSamples(juce::jmax(4, juce::roundToInt(0.025f * static_cast<float>(currentSampleRate))));
-    ghostDelayR.setMaximumDelayInSamples(juce::jmax(4, juce::roundToInt(0.025f * static_cast<float>(currentSampleRate))));
+    const juce::dsp::ProcessSpec delaySpec {
+        currentSampleRate,
+        512,
+        1
+    };
+
+    ghostDelayL.setMaximumDelayInSamples(
+        juce::jmax(4, juce::roundToInt(0.025f * static_cast<float>(currentSampleRate))));
+    ghostDelayR.setMaximumDelayInSamples(
+        juce::jmax(4, juce::roundToInt(0.025f * static_cast<float>(currentSampleRate))));
+    ghostDelayL.prepare(delaySpec);
+    ghostDelayR.prepare(delaySpec);
     ghostDelayL.setDelay(static_cast<float>(ghostDelaySamples));
     ghostDelayR.setDelay(static_cast<float>(ghostDelaySamples));
     ghostDelayL.reset();
