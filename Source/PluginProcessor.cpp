@@ -159,26 +159,28 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
     const float width = shape(apvts.getRawParameterValue("width")->load());
     const float air = shape(apvts.getRawParameterValue("air")->load());
     const float smooth = shape(apvts.getRawParameterValue("smooth")->load());
-    const float mix = apvts.getRawParameterValue("mix")->load();
-
-    // Smooth changes detector response time without introducing block-level jumps.
-    const float fastAttackMs = 1.5f + smooth * 8.0f;
-    const float fastReleaseMs = 22.0f + smooth * 85.0f;
-    const float slowAttackMs = 10.0f + smooth * 35.0f;
-    const float slowReleaseMs = 120.0f + smooth * 380.0f;
-
-    fastAttackCoeff = coeff(fastAttackMs, currentSampleRate);
-    fastReleaseCoeff = coeff(fastReleaseMs, currentSampleRate);
-    slowAttackCoeff = coeff(slowAttackMs, currentSampleRate);
-    slowReleaseCoeff = coeff(slowReleaseMs, currentSampleRate);
+    const float mix = juce::jlimit(0.0f, 1.0f,
+                                   apvts.getRawParameterValue("mix")->load());
 
     const int channels = b.getNumChannels();
-    if (channels == 0 || b.getNumSamples() == 0)
+    const int samples = b.getNumSamples();
+
+    if (channels == 0 || samples == 0)
         return;
 
-    float peakT = 0.0f, peakB = 0.0f, peakTail = 0.0f, peakG = 0.0f;
+    // Smooth controls only change detector timing. The actual audio path stays
+    // sample-continuous so turning a knob cannot create a block-sized jump.
+    fastAttackCoeff = coeff(1.5f + smooth * 8.0f, currentSampleRate);
+    fastReleaseCoeff = coeff(22.0f + smooth * 85.0f, currentSampleRate);
+    slowAttackCoeff = coeff(10.0f + smooth * 35.0f, currentSampleRate);
+    slowReleaseCoeff = coeff(120.0f + smooth * 380.0f, currentSampleRate);
 
-    for (int n = 0; n < b.getNumSamples(); ++n)
+    float peakT = 0.0f;
+    float peakB = 0.0f;
+    float peakTail = 0.0f;
+    float peakG = 0.0f;
+
+    for (int n = 0; n < samples; ++n)
     {
         const float inL = b.getSample(0, n);
         const float inR = channels > 1 ? b.getSample(1, n) : inL;
@@ -198,28 +200,28 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
             slowEnvelope = slowReleaseCoeff * slowEnvelope
                          + (1.0f - slowReleaseCoeff) * detector;
 
-        // Ratio detector: much more reliable for quiet or heavily compressed material.
         const float reference = juce::jmax(slowEnvelope, 0.0005f);
         const float attackRatio = fastEnvelope / reference;
         const float transient = juce::jlimit(
             0.0f, 1.0f, (attackRatio - 1.0f) * 2.75f);
 
-        const float tailRatio = slowEnvelope / juce::jmax(fastEnvelope, 0.0005f);
+        const float tailRatio = slowEnvelope
+                              / juce::jmax(fastEnvelope, 0.0005f);
         const float tailState = juce::jlimit(
             0.0f, 1.0f, (tailRatio - 1.0f) * 1.8f);
 
         const float bodyState = juce::jlimit(
             0.0f, 1.0f, slowEnvelope * 4.0f);
 
-        previousEnvelope = fastEnvelope;
-
         const float targetMotion = juce::jlimit(
             0.0f, 1.0f,
-            0.52f * transient
-            + 0.20f * body * bodyState
-            + 0.34f * tail * tailState);
+            0.55f * transient
+            + 0.18f * body * bodyState
+            + 0.30f * tail * tailState);
 
-        const float ghostTarget = targetMotion * (0.12f + 0.88f * ghost);
+        // GHOST is a real master control. At zero, the effect state is zero
+        // and the final output is mathematically dry when MIX is 100%.
+        const float ghostTarget = targetMotion * ghost;
 
         if (ghostTarget > ghostState)
             ghostState = ghostRiseCoeff * ghostState
@@ -228,15 +230,12 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
             ghostState = ghostFallCoeff * ghostState
                        + (1.0f - ghostFallCoeff) * ghostTarget;
 
-        const float motion = juce::jlimit(0.0f, 1.0f, ghostState);
-
         peakT = juce::jmax(peakT, transient);
         peakB = juce::jmax(peakB, bodyState);
         peakTail = juce::jmax(peakTail, tailState);
-        peakG = juce::jmax(peakG, motion);
+        peakG = juce::jmax(peakG, ghostState);
 
-        // Broad tonal components used as a stable fallback around the
-        // perceptual contrast bank.
+        // --- Stable broad-band decomposition -----------------------------------------
         bodyL += bodyCoeff * (inL - bodyL);
         bodyR += bodyCoeff * (inR - bodyR);
         toneL += toneCoeff * (inL - toneL);
@@ -249,9 +248,7 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
         const float highL = inL - toneL;
         const float highR = inR - toneR;
 
-        // --- Perceptual contrast bank ------------------------------------------------
-        // Measure six broad spectral regions, then identify the dominant one.
-        // GHOST boosts that region while temporarily reducing nearby masking bands.
+        // --- Perceptual spectral focus -----------------------------------------------
         float bandSum = 0.0f;
         float strongest = 0.0f;
         int strongestIndex = dominantBand;
@@ -289,20 +286,19 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
         dominantBand = strongestIndex;
 
         const float uniformShare = 1.0f / static_cast<float>(numBands);
-        const float dominantShare = strongest / juce::jmax(bandSum, 1.0e-5f);
+        const float dominantShare =
+            strongest / juce::jmax(bandSum, 1.0e-5f);
         const float dominance = juce::jlimit(
             0.0f, 1.0f,
             (dominantShare - uniformShare) / (0.42f - uniformShare));
 
-        // When the spectrum is ambiguous, GHOST backs off instead of
-        // arbitrarily colouring the whole mix.
         const float focusPulse =
             juce::jlimit(0.0f, 1.0f,
-                transient * (0.45f + 0.85f * attack)
-                + ghostState * 0.25f)
+                transient * (0.50f + 0.85f * attack)
+                + ghostState * 0.20f)
             * dominance * ghost;
 
-        std::array<float, numBands> desiredBandGain;
+        std::array<float, numBands> desiredBandGain {};
         float totalCorrection = 0.0f;
 
         for (int i = 0; i < numBands; ++i)
@@ -311,54 +307,48 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
                 static_cast<float>(i - dominantBand));
 
             const float focusWeight =
-                std::exp(-1.25f * distance * distance);
-
+                std::exp(-1.20f * distance * distance);
             const float shadowWeight =
-                distance > 2.5f ? 0.0f
-                                 : std::exp(-0.80f * distance * distance);
+                distance > 2.5f
+                    ? 0.0f
+                    : std::exp(-0.78f * distance * distance);
 
             float correction =
-                + focusWeight * attack * focusPulse * 0.34f
-                - shadowWeight * tail * ghostState * 0.13f
-                - shadowWeight * focusPulse * 0.19f;
+                + focusWeight * attack * focusPulse * 0.22f
+                - shadowWeight * tail * ghostState * 0.08f
+                - shadowWeight * focusPulse * 0.12f;
 
-            // A little extra high-frequency contrast makes the transient
-            // perceptually clearer without applying a static treble boost.
             if (i == numBands - 1)
-                correction += air * focusPulse * 0.16f;
+                correction += air * focusPulse * 0.10f;
 
             desiredBandGain[static_cast<size_t>(i)] =
-                juce::jlimit(0.68f, 1.42f, 1.0f + correction);
-
+                juce::jlimit(0.78f, 1.28f, 1.0f + correction);
             totalCorrection += desiredBandGain[static_cast<size_t>(i)] - 1.0f;
         }
 
-        // Rough energy conservation: avoid the classic "it is just louder"
-        // impression by compensating the global correction across all bands.
         const float compensation =
             -0.55f * totalCorrection / static_cast<float>(numBands);
 
         for (int i = 0; i < numBands; ++i)
         {
             const auto index = static_cast<size_t>(i);
-            const float target =
-                juce::jlimit(0.65f, 1.38f,
-                    desiredBandGain[index] + compensation);
+            const float target = juce::jlimit(
+                0.76f, 1.25f, desiredBandGain[index] + compensation);
 
             auto& current = bandGain[index];
             const float smoothing = target > current
-                ? bandGainAttackCoeff : bandGainReleaseCoeff;
+                ? bandGainAttackCoeff
+                : bandGainReleaseCoeff;
 
             current = smoothing * current
                     + (1.0f - smoothing) * target;
         }
 
-        // -----------------------------------------------------------------------------
-        // THE GHOST HALO v2
-        // Two asymmetric micro-reflections create a spatial "shadow" that can
-        // briefly detach from the source instead of behaving like a plain EQ move.
-        const float shadowInputL = 0.58f * highL + 0.42f * midL;
-        const float shadowInputR = 0.58f * highR + 0.42f * midR;
+        // --- Ghost Halo --------------------------------------------------------------
+        // Two different micro-reflections create an after-image. The later tap
+        // is cross-fed so the shadow can detach from the original stereo position.
+        const float shadowInputL = 0.60f * highL + 0.40f * midL;
+        const float shadowInputR = 0.60f * highR + 0.40f * midR;
 
         ghostDelayShortL.pushSample(0, shadowInputL);
         ghostDelayShortR.pushSample(0, shadowInputR);
@@ -370,15 +360,15 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
         const float longL = ghostDelayLongL.popSample(0);
         const float longR = ghostDelayLongR.popSample(0);
 
-        // Cross-feed the later tap so the reflection is not locked to the
-        // exact same stereo position as the original event.
-        const float ghostReflectionL = 0.82f * shortL + 0.30f * longR;
-        const float ghostReflectionR = 0.82f * shortR + 0.30f * longL;
+        const float reflectionL =
+            0.78f * shortL + 0.34f * longR;
+        const float reflectionR =
+            0.78f * shortR + 0.34f * longL;
 
         const float haloTarget = juce::jlimit(
             0.0f, 1.0f,
-            transient * ghost * (0.45f + 0.95f * attack)
-            + ghostState * 0.24f);
+            transient * ghost * (0.55f + 0.90f * attack)
+            + ghostState * 0.18f);
 
         if (haloTarget > ghostHaloL)
             ghostHaloL = haloAttackCoeff * ghostHaloL
@@ -395,102 +385,96 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
                        + (1.0f - haloReleaseCoeff) * haloTarget;
 
         const float haloState = 0.5f * (ghostHaloL + ghostHaloR);
-        const float haloAmount = width * ghost * 0.66f * haloState;
+        const float haloAmount =
+            width * ghost * 0.72f * haloState;
 
-        // -----------------------------------------------------------------------------
-        // Perceptual spectral contrast
-        const float attackPulse = transient * ghost * (0.35f + 0.95f * attack);
-        const float bodyPulse = bodyState * ghost * (0.30f + 0.70f * body);
-        const float tailPulse = tailState * ghost * (0.35f + 0.65f * tail);
+        // --- Musical / perceptual movement -------------------------------------------
+        // The dry decomposition sums exactly back to the input. Every deviation
+        // below is scaled by GHOST, which keeps MIX predictable and bypass clean.
+        const float attackPulse =
+            transient * ghost * (0.30f + 0.95f * attack);
+        const float bodyPulse =
+            bodyState * ghost * (0.25f + 0.75f * body);
+        const float tailPulse =
+            tailState * ghost * (0.30f + 0.70f * tail);
 
-        const float transientBoost =
-            1.0f + attack * attackPulse * 0.72f;
-        const float bodyBoost =
-            1.0f + body * bodyPulse * 0.28f;
-        const float tailCut =
-            1.0f - tail * tailPulse * 0.26f;
-        const float airBoost =
-            1.0f + air * attackPulse * 1.10f
-                  - air * tailPulse * 0.20f;
+        const float lowGain =
+            1.0f + body * bodyPulse * 0.18f;
+        const float midGain =
+            1.0f + attack * attackPulse * 0.46f
+                  - tail * tailPulse * 0.12f;
+        const float highGain =
+            1.0f + air * attackPulse * 0.62f
+                  - air * tailPulse * 0.12f;
 
-        const float lowLProcessed = lowL * bodyBoost;
-        const float lowRProcessed = lowR * bodyBoost;
-        const float midLProcessed = midL * transientBoost * tailCut;
-        const float midRProcessed = midR * transientBoost * tailCut;
-        const float highLProcessed = highL * airBoost * tailCut;
-        const float highRProcessed = highR * airBoost * tailCut;
+        float spectralDeltaL = 0.0f;
+        float spectralDeltaR = 0.0f;
+
+        for (int i = 0; i < numBands; ++i)
+        {
+            const auto index = static_cast<size_t>(i);
+            const float delta = bandGain[index] - 1.0f;
+            spectralDeltaL += bandSamplesL[index] * delta;
+            spectralDeltaR += bandSamplesR[index] * delta;
+        }
+
+        spectralDeltaL *= ghost;
+        spectralDeltaR *= ghost;
+
+        float wetL =
+            lowL * lowGain
+            + midL * midGain
+            + highL * highGain
+            + spectralDeltaL;
+
+        float wetR =
+            lowR * lowGain
+            + midR * midGain
+            + highR * highGain
+            + spectralDeltaR;
 
         if (channels > 1)
         {
-            const float mid = 0.5f * (lowLProcessed + lowRProcessed);
-            const float sideLow = 0.5f * (lowLProcessed - lowRProcessed);
-            const float sideMid = 0.5f * (midLProcessed - midRProcessed);
-            const float sideHigh = 0.5f * (highLProcessed - highRProcessed);
+            // Width acts on the ghost contribution, not on the dry image.
+            // This prevents the plugin from becoming a conventional stereo widener.
+            const float midReflection =
+                0.5f * (reflectionL + reflectionR);
+            const float sideReflection =
+                0.5f * (reflectionL - reflectionR)
+                * (0.35f + 1.65f * width);
 
-            // GHOST opens on attacks and gently collapses during the tail.
-            const float widthFactor = juce::jlimit(
-                0.55f, 2.35f,
-                1.0f + width * (0.25f + 0.75f * ghostState)
-                    * (1.70f * transient - 0.90f * tailState));
+            const float spatialL =
+                0.20f * midReflection + sideReflection;
+            const float spatialR =
+                0.20f * midReflection - sideReflection;
 
-            float spectralDeltaL = 0.0f;
-            float spectralDeltaR = 0.0f;
-
-            for (int i = 0; i < numBands; ++i)
-            {
-                const auto index = static_cast<size_t>(i);
-                spectralDeltaL += bandSamplesL[index]
-                                * (bandGain[index] - 1.0f);
-                spectralDeltaR += bandSamplesR[index]
-                                * (bandGain[index] - 1.0f);
-            }
-
-            const float outL =
-                mid + sideLow
-                + 0.72f * midLProcessed
-                + sideMid * widthFactor
-                + highLProcessed
-                + spectralDeltaL
-                + ghostReflectionL * haloAmount;
-
-            const float outR =
-                mid - sideLow
-                + 0.72f * midRProcessed
-                - sideMid * widthFactor
-                + highRProcessed
-                + spectralDeltaR
-                + ghostReflectionR * haloAmount;
-
-            // Tiny dynamic saturation prevents the ghost response from feeling like
-            // a static EQ move when the source has strong transient energy.
-            const float drive = 1.0f + 1.35f * ghostState * transient;
-            const float normalizer = std::tanh(drive);
-            const float wetL = std::tanh(outL * drive) / normalizer;
-            const float wetR = std::tanh(outR * drive) / normalizer;
-
-            b.setSample(0, n, clampDenormal(inL + (wetL - inL) * mix));
-            b.setSample(1, n, clampDenormal(inR + (wetR - inR) * mix));
+            wetL += spatialL * haloAmount;
+            wetR += spatialR * haloAmount;
         }
         else
         {
-            float spectralDelta = 0.0f;
-            for (int i = 0; i < numBands; ++i)
-                spectralDelta += bandSamplesL[static_cast<size_t>(i)]
-                               * (bandGain[static_cast<size_t>(i)] - 1.0f);
-
-            // Mono sources cannot create a true side image, but the
-            // transient/body contrast still remains active.
-            const float out =
-                lowLProcessed
-                + 0.85f * midLProcessed
-                + highLProcessed
-                + spectralDelta;
-
-            const float drive = 1.0f + 1.35f * ghostState * transient;
-            const float wet = std::tanh(out * drive) / std::tanh(drive);
-
-            b.setSample(0, n, clampDenormal(inL + (wet - inL) * mix));
+            wetL += 0.28f * 0.5f * (reflectionL + reflectionR)
+                  * haloAmount;
         }
+
+        // A restrained event-dependent soft clip is used only on the wet path.
+        // It adds a small density change to strong transients without acting
+        // like a permanent saturator.
+        if (ghost > 0.001f)
+        {
+            const float drive =
+                1.0f + 0.65f * ghostState * transient;
+            const float normalizer = std::tanh(drive);
+            wetL = std::tanh(wetL * drive) / normalizer;
+            wetR = std::tanh(wetR * drive) / normalizer;
+        }
+
+        const float dryAmount = 1.0f - mix;
+        b.setSample(0, n, clampDenormal(
+            inL * dryAmount + wetL * mix));
+        if (channels > 1)
+            b.setSample(1, n, clampDenormal(
+                inR * dryAmount + wetR * mix));
     }
 
     transientMeter.store(peakT);
