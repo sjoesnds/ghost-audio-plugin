@@ -4,9 +4,9 @@ GHOST is an experimental dynamic audio effect for FL Studio and other VST3 hosts
 
 > Make sound react.
 
-## Current prototype: 0.5.0
+## Current prototype: 0.5.1
 
-GHOST tracks three continuously changing properties of the incoming audio and carries those detections through a smoothed temporal Ghost state. Version 0.5.0 adds a more obvious spatial event: a short asymmetric halo built from two micro-reflection taps.
+GHOST tracks three continuously changing properties of the incoming audio and carries those detections through a smoothed temporal Ghost state. Version 0.5.1 adds a more obvious spatial event: a short asymmetric halo built from two micro-reflection taps.
 
 - **Transient** — fast attack activity.
 - **Body** — sustained program energy.
