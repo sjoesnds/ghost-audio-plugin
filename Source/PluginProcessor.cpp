@@ -3,12 +3,22 @@
 
 namespace
 {
-    constexpr float minWidth = 1.0f;
-    constexpr float maxWidth = 2.0f;
-
-    inline float fastCoefficient(float seconds, double sampleRate)
+    inline float coeff(float ms, double sr)
     {
-        return std::exp(-1.0f / (seconds * static_cast<float>(sampleRate)));
+        return std::exp(-1.0f / (juce::jmax(0.0001f, ms) * 0.001f * static_cast<float>(sr)));
+    }
+
+    inline float alpha(float cutoff, double sr)
+    {
+        const float omega = 2.0f * juce::MathConstants<float>::pi
+                          * cutoff / static_cast<float>(sr);
+        return juce::jlimit(0.001f, 0.999f, omega / (1.0f + omega));
+    }
+
+    inline float shape(float x)
+    {
+        x = juce::jlimit(0.0f, 1.0f, x);
+        return x * x * (3.0f - 2.0f * x);
     }
 }
 
@@ -22,142 +32,149 @@ GHOSTAudioProcessor::GHOSTAudioProcessor()
 
 juce::AudioProcessorValueTreeState::ParameterLayout GHOSTAudioProcessor::createParameterLayout()
 {
-    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
+    const juce::NormalisableRange<float> r(0.0f, 1.0f, 0.001f);
 
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "ghostAmount",
-        "Ghost",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f),
-        0.5f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "attack",
-        "Attack",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f),
-        0.5f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "tail",
-        "Tail",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f),
-        0.5f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "width",
-        "Width",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f),
-        0.5f));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "mix",
-        "Mix",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f),
-        1.0f));
-
-    return { params.begin(), params.end() };
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"ghostAmount",1}, "Ghost", r, 0.50f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"attack",1}, "Attack", r, 0.50f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"body",1}, "Body", r, 0.35f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"tail",1}, "Tail", r, 0.50f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"width",1}, "Width", r, 0.45f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"air",1}, "Air", r, 0.35f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"smooth",1}, "Smooth", r, 0.55f));
+    p.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"mix",1}, "Mix", r, 1.00f));
+    return { p.begin(), p.end() };
 }
 
-void GHOSTAudioProcessor::prepareToPlay(double sampleRate, int)
+void GHOSTAudioProcessor::prepareToPlay(double sr, int)
 {
-    currentSampleRate = sampleRate;
-    envelope = 0.0f;
-    widthState = 0.0f;
-
-    attackCoeff = fastCoefficient(0.005f, sampleRate);
-    releaseCoeff = fastCoefficient(0.120f, sampleRate);
+    currentSampleRate = juce::jmax(8000.0, sr);
+    fastEnvelope = slowEnvelope = previousEnvelope = 0.0f;
+    lowpassL = lowpassR = 0.0f;
+    fastAttackCoeff = coeff(2.5f, currentSampleRate);
+    fastReleaseCoeff = coeff(45.0f, currentSampleRate);
+    slowAttackCoeff = coeff(18.0f, currentSampleRate);
+    slowReleaseCoeff = coeff(260.0f, currentSampleRate);
+    toneCoeff = alpha(1800.0f, currentSampleRate);
+    transientMeter.store(0.0f);
+    bodyMeter.store(0.0f);
+    tailMeter.store(0.0f);
+    ghostMeter.store(0.0f);
 }
 
-void GHOSTAudioProcessor::releaseResources()
+void GHOSTAudioProcessor::releaseResources() {}
+
+bool GHOSTAudioProcessor::isBusesLayoutSupported(const BusesLayout& l) const
 {
+    const auto in = l.getMainInputChannelSet();
+    const auto out = l.getMainOutputChannelSet();
+    return in == out && (in == juce::AudioChannelSet::mono()
+                      || in == juce::AudioChannelSet::stereo());
 }
 
-bool GHOSTAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
-{
-    const auto& mainIn = layouts.getMainInputChannelSet();
-    const auto& mainOut = layouts.getMainOutputChannelSet();
-
-    if (mainIn != mainOut)
-        return false;
-
-    return mainIn == juce::AudioChannelSet::mono()
-        || mainIn == juce::AudioChannelSet::stereo();
-}
-
-void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
-                                       juce::MidiBuffer&)
+void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
 
-    const auto ghost = apvts.getRawParameterValue("ghostAmount")->load();
-    const auto attackAmount = apvts.getRawParameterValue("attack")->load();
-    const auto tailAmount = apvts.getRawParameterValue("tail")->load();
-    const auto widthAmount = apvts.getRawParameterValue("width")->load();
-    const auto mix = apvts.getRawParameterValue("mix")->load();
+    const float ghost = shape(apvts.getRawParameterValue("ghostAmount")->load()) * 0.90f;
+    const float attack = shape(apvts.getRawParameterValue("attack")->load());
+    const float body = shape(apvts.getRawParameterValue("body")->load());
+    const float tail = shape(apvts.getRawParameterValue("tail")->load());
+    const float width = shape(apvts.getRawParameterValue("width")->load());
+    const float air = shape(apvts.getRawParameterValue("air")->load());
+    const float mix = apvts.getRawParameterValue("mix")->load();
 
-    const auto numChannels = buffer.getNumChannels();
-    const auto numSamples = buffer.getNumSamples();
+    const int channels = b.getNumChannels();
+    if (channels == 0 || b.getNumSamples() == 0) return;
 
-    if (numChannels == 0 || numSamples == 0)
-        return;
+    float peakT = 0.0f, peakB = 0.0f, peakTail = 0.0f, peakG = 0.0f;
 
-    for (int sample = 0; sample < numSamples; ++sample)
+    for (int n = 0; n < b.getNumSamples(); ++n)
     {
-        float sumAbs = 0.0f;
+        const float left = b.getSample(0, n);
+        const float right = channels > 1 ? b.getSample(1, n) : left;
+        const float d = 0.5f * (std::abs(left) + std::abs(right));
 
-        for (int channel = 0; channel < numChannels; ++channel)
-            sumAbs += std::abs(buffer.getReadPointer(channel)[sample]);
+        fastEnvelope = d > fastEnvelope
+            ? fastAttackCoeff * fastEnvelope + (1.0f - fastAttackCoeff) * d
+            : fastReleaseCoeff * fastEnvelope + (1.0f - fastReleaseCoeff) * d;
 
-        const float detector = sumAbs / static_cast<float>(numChannels);
+        slowEnvelope = d > slowEnvelope
+            ? slowAttackCoeff * slowEnvelope + (1.0f - slowAttackCoeff) * d
+            : slowReleaseCoeff * slowEnvelope + (1.0f - slowReleaseCoeff) * d;
 
-        if (detector > envelope)
-            envelope = attackCoeff * envelope + (1.0f - attackCoeff) * detector;
-        else
-            envelope = releaseCoeff * envelope + (1.0f - releaseCoeff) * detector;
+        const float transient = juce::jlimit(0.0f, 1.0f,
+            (fastEnvelope - slowEnvelope) * 10.0f);
+        const float bodyState = juce::jlimit(0.0f, 1.0f, slowEnvelope * 3.0f);
+        const float tailState = juce::jlimit(0.0f, 1.0f,
+            (previousEnvelope - fastEnvelope) * 32.0f
+            + (1.0f - bodyState) * 0.12f);
+        previousEnvelope = fastEnvelope;
 
-        const float attackShape = juce::jlimit(0.0f, 1.0f,
-                                               (detector - envelope * 0.75f) * 8.0f);
-        const float tailShape = 1.0f - juce::jlimit(0.0f, 1.0f, envelope * 3.0f);
+        const float motion = juce::jlimit(0.0f, 1.0f,
+            transient * (0.65f + 0.80f * attack)
+            + bodyState * body * 0.22f
+            + tailState * tail * 0.28f) * ghost;
 
-        const float ghostDepth = ghost * 0.85f;
-        const float dynamicWidth = minWidth
-            + (maxWidth - minWidth)
-                * widthAmount
-                * ghostDepth
-                * attackShape;
+        peakT = juce::jmax(peakT, transient);
+        peakB = juce::jmax(peakB, bodyState);
+        peakTail = juce::jmax(peakTail, tailState);
+        peakG = juce::jmax(peakG, motion);
 
-        if (numChannels >= 2)
+        if (channels > 1)
         {
-            const float dryL = buffer.getSample(0, sample);
-            const float dryR = buffer.getSample(1, sample);
+            const float mid = 0.5f * (left + right);
+            const float side = 0.5f * (left - right);
 
-            const float mid = 0.5f * (dryL + dryR);
-            const float side = 0.5f * (dryL - dryR);
+            lowpassL += toneCoeff * (left - lowpassL);
+            lowpassR += toneCoeff * (right - lowpassR);
 
-            const float shapedSide = side * dynamicWidth;
+            const float highL = left - lowpassL;
+            const float highR = right - lowpassR;
 
-            const float ghostGain =
-                1.0f
-                + (attackShape * attackAmount * ghostDepth * 0.35f)
-                - (tailShape * tailAmount * ghostDepth * 0.12f);
+            const float gain =
+                1.0f + attack * transient * ghost * 0.55f
+                     + body * bodyState * ghost * 0.18f;
 
-            const float wetL = (mid + shapedSide) * ghostGain;
-            const float wetR = (mid - shapedSide) * ghostGain;
+            const float tailDamp =
+                1.0f - tail * tailState * ghost * 0.24f;
 
-            buffer.setSample(0, sample, dryL + (wetL - dryL) * mix);
-            buffer.setSample(1, sample, dryR + (wetR - dryR) * mix);
+            const float airGain =
+                1.0f + air * transient * ghost * 0.65f
+                     - tail * tailState * ghost * 0.20f;
+
+            const float dynamicWidth = juce::jlimit(0.45f, 1.85f,
+                1.0f + width * ghost * (1.20f * transient - 0.55f * tailState));
+
+            const float wm = mid * gain;
+            const float ws = side * dynamicWidth;
+            const float wetL = wm + ws + highL * (airGain * tailDamp - 1.0f) * 0.70f;
+            const float wetR = wm - ws + highR * (airGain * tailDamp - 1.0f) * 0.70f;
+
+            b.setSample(0, n, left + (wetL - left) * mix);
+            b.setSample(1, n, right + (wetR - right) * mix);
         }
         else
         {
-            const float dry = buffer.getSample(0, sample);
-            const float ghostGain =
-                1.0f
-                + (attackShape * attackAmount * ghostDepth * 0.35f)
-                - (tailShape * tailAmount * ghostDepth * 0.12f);
+            lowpassL += toneCoeff * (left - lowpassL);
+            const float high = left - lowpassL;
+            const float gain =
+                1.0f + attack * transient * ghost * 0.55f
+                     + body * bodyState * ghost * 0.18f
+                     - tail * tailState * ghost * 0.15f;
+            const float airGain =
+                1.0f + air * transient * ghost * 0.60f
+                     - tail * tailState * ghost * 0.18f;
 
-            const float wet = dry * ghostGain;
-            buffer.setSample(0, sample, dry + (wet - dry) * mix);
+            const float wet = left * gain + high * (airGain - 1.0f) * 0.70f;
+            b.setSample(0, n, left + (wet - left) * mix);
         }
     }
+
+    transientMeter.store(peakT);
+    bodyMeter.store(peakB);
+    tailMeter.store(peakTail);
+    ghostMeter.store(peakG);
 }
 
 juce::AudioProcessorEditor* GHOSTAudioProcessor::createEditor()
@@ -167,15 +184,13 @@ juce::AudioProcessorEditor* GHOSTAudioProcessor::createEditor()
 
 void GHOSTAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    if (auto state = apvts.copyState().createXml())
-        copyXmlToBinary(*state, destData);
+    if (auto xml = apvts.copyState().createXml())
+        copyXmlToBinary(*xml, destData);
 }
 
-void GHOSTAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
+void GHOSTAudioProcessor::setStateInformation(const void* data, int size)
 {
-    if (auto state = getXmlFromBinary(data, sizeInBytes))
-    {
-        if (state->hasTagName(apvts.state.getType()))
-            apvts.replaceState(juce::ValueTree::fromXml(*state));
-    }
+    if (auto xml = getXmlFromBinary(data, size))
+        if (xml->hasTagName(apvts.state.getType()))
+            apvts.replaceState(juce::ValueTree::fromXml(*xml));
 }
