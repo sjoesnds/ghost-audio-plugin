@@ -31,19 +31,19 @@ GHOSTAudioProcessorEditor::GHOSTAudioProcessorEditor(GHOSTAudioProcessor& p)
                      &widthSlider, &airSlider, &smoothSlider, &mixSlider })
         addAndMakeVisible(*s);
 
-    title.setText("GHOST   //   v0.5.1", juce::dontSendNotification);
+    title.setText("GHOST   //   v1.0.0", juce::dontSendNotification);
     title.setFont(juce::Font(juce::FontOptions(30.0f, juce::Font::bold)));
     title.setColour(juce::Label::textColourId, text);
     title.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(title);
 
-    subtitle.setText("TRANSIENT HALO ENGINE", juce::dontSendNotification);
+    subtitle.setText("SPATIAL TRANSIENT AFTERIMAGE", juce::dontSendNotification);
     subtitle.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
     subtitle.setColour(juce::Label::textColourId, muted);
     subtitle.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(subtitle);
 
-    versionLabel.setText("0.5.1", juce::dontSendNotification);
+    versionLabel.setText("RELEASE", juce::dontSendNotification);
     versionLabel.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
     versionLabel.setColour(juce::Label::textColourId, version);
     versionLabel.setJustificationType(juce::Justification::centredRight);
@@ -86,14 +86,7 @@ void GHOSTAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(edge);
     g.drawRoundedRectangle(root.toFloat(), 18.0f, 1.0f);
 
-    auto header = root.removeFromTop(62);
-    title.setBounds(header.removeFromTop(38).reduced(20, 0));
-
-    auto meta = header.reduced(22, 0);
-    auto versionArea = meta.removeFromRight(72);
-    subtitle.setBounds(meta);
-    versionLabel.setBounds(versionArea);
-
+    root.removeFromTop(62);
     auto display = root.removeFromTop(226).reduced(20, 8);
     g.setColour(juce::Colour::fromRGB(10, 12, 16));
     g.fillRoundedRectangle(display.toFloat(), 14.0f);
@@ -151,8 +144,6 @@ void GHOSTAudioProcessorEditor::paint(juce::Graphics& g)
     const int cellW = (grid.getWidth() - gap * 3) / columns;
     const int cellH = (grid.getHeight() - gap) / 2;
 
-    juce::Slider* s[] = { &ghostSlider, &attackSlider, &bodySlider, &tailSlider,
-                          &widthSlider, &airSlider, &smoothSlider, &mixSlider };
     const char* names[] = { "GHOST", "ATTACK", "BODY", "TAIL",
                             "WIDTH", "AIR", "SMOOTH", "MIX" };
 
@@ -164,8 +155,6 @@ void GHOSTAudioProcessorEditor::paint(juce::Graphics& g)
                         .withWidth(cellW).withHeight(cellH);
 
         auto area = cell.reduced(10, 4);
-        s[i]->setBounds(area.removeFromTop(juce::jmax(74, area.getHeight() - 22)));
-
         g.setColour(muted);
         g.setFont(10.0f);
         g.drawText(names[i], area.removeFromBottom(18),
@@ -175,6 +164,38 @@ void GHOSTAudioProcessorEditor::paint(juce::Graphics& g)
 
 void GHOSTAudioProcessorEditor::resized()
 {
+    auto root = getLocalBounds().reduced(18);
+
+    auto header = root.removeFromTop(62);
+    title.setBounds(header.removeFromTop(38).reduced(20, 0));
+
+    auto meta = header.reduced(22, 0);
+    auto versionArea = meta.removeFromRight(82);
+    subtitle.setBounds(meta);
+    versionLabel.setBounds(versionArea);
+
+    root.removeFromTop(226);
+
+    auto grid = root.reduced(8, 4);
+    constexpr int columns = 4;
+    const int gap = 10;
+    const int cellW = (grid.getWidth() - gap * 3) / columns;
+    const int cellH = (grid.getHeight() - gap) / 2;
+
+    juce::Slider* s[] = { &ghostSlider, &attackSlider, &bodySlider, &tailSlider,
+                          &widthSlider, &airSlider, &smoothSlider, &mixSlider };
+
+    for (int i = 0; i < 8; ++i)
+    {
+        const int row = i / columns, col = i % columns;
+        auto cell = grid.withX(grid.getX() + col * (cellW + gap))
+                        .withY(grid.getY() + row * (cellH + gap))
+                        .withWidth(cellW).withHeight(cellH);
+
+        auto area = cell.reduced(10, 4);
+        s[i]->setBounds(area.removeFromTop(juce::jmax(74, area.getHeight() - 22)));
+    }
+
     repaint();
 }
 
