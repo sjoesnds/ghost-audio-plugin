@@ -4,9 +4,9 @@ GHOST is an experimental dynamic audio effect for FL Studio and other VST3 hosts
 
 > Make sound react.
 
-## Current prototype: 0.5.1
+## Release: 1.0.0
 
-GHOST tracks three continuously changing properties of the incoming audio and carries those detections through a smoothed temporal Ghost state. Version 0.5.1 adds a more obvious spatial event: a short asymmetric halo built from two micro-reflection taps.
+GHOST 1.0 is the release build of the transient-aware spatial afterimage engine. It detects transient, body and tail behaviour, finds the dominant spectral region of an event, shapes local contrast, and creates a short asymmetric two-tap reflection. The effect is designed to react to the performance instead of behaving like a static EQ or conventional stereo widener.
 
 - **Transient** — fast attack activity.
 - **Body** — sustained program energy.
@@ -26,7 +26,7 @@ Those states now drive a perceptual contrast stage: GHOST identifies the dominan
 - **SMOOTH** — response shaping.
 - **MIX** — dry/wet amount.
 
-The central display follows the live detector and shows transient, body, tail and overall ghost motion. The exact engine version is shown in the interface so builds are easy to distinguish while testing.
+The central display follows the live detector and shows transient, body, tail and overall ghost motion. The interface shows the exact release version in the main title, and the GitHub Actions artifact is versioned as GHOST-VST3-v1.0.0.
 
 ## Build
 
@@ -39,6 +39,10 @@ cmake --build build --config Release --parallel
 
 JUCE is fetched automatically by CMake.
 
-## Direction
+## Release notes
 
-GHOST should stay a distinctive audio effect, not become a bundle of conventional processors. Planned work includes better frequency-dependent behavior, character modes, polished visual feedback, presets, and automated audio/plugin QA.
+- Stable VST3 release for Windows via the included GitHub Actions build.
+- GHOST at 0% is a clean dry path; MIX provides predictable dry/wet blending.
+- Spatial halo uses two short reflections with cross-fed stereo placement.
+- DSP allocations for the delay lines are performed during preparation, not during audio processing.
+- The plugin remains intentionally focused: no preset browser, no MIDI dependency, and no added conventional compressor/EQ module.
