@@ -13,7 +13,7 @@ GHOST now tracks three continuously changing properties of the incoming audio an
 - **Tail** — decay/release behavior.
 - **Ghost state** — a short-lived memory of recent audio activity, smoothing the transition between events.
 
-Those states drive independent low/mid/high responses in real time instead of applying one static treatment.
+Those states now drive a perceptual contrast stage: GHOST identifies the dominant spectral region of the current event, reinforces it, and temporarily reduces nearby masking energy instead of relying on a static EQ move.
 
 ### Controls
 
