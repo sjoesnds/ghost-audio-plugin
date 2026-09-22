@@ -291,7 +291,7 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
             juce::jlimit(0.0f, 1.0f,
                 transient * (0.45f + 0.85f * attack)
                 + ghostState * 0.25f)
-            * dominance;
+            * dominance * ghost;
 
         std::array<float, numBands> desiredBandGain;
         float totalCorrection = 0.0f;
@@ -360,8 +360,8 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
 
         const float haloTarget = juce::jlimit(
             0.0f, 1.0f,
-            transient * (0.35f + 0.95f * ghost)
-            + ghostState * 0.20f);
+            transient * ghost * (0.45f + 0.95f * attack)
+            + ghostState * 0.24f);
 
         if (haloTarget > ghostHaloL)
             ghostHaloL = haloAttackCoeff * ghostHaloL
@@ -378,14 +378,13 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
                        + (1.0f - haloReleaseCoeff) * haloTarget;
 
         const float haloState = 0.5f * (ghostHaloL + ghostHaloR);
-        const float haloAmount = width * (0.08f + 0.34f * ghost)
-                               * haloState;
+        const float haloAmount = width * ghost * 0.48f * haloState;
 
         // -----------------------------------------------------------------------------
         // Perceptual spectral contrast
-        const float attackPulse = transient * (0.45f + 0.95f * ghost);
-        const float bodyPulse = bodyState * (0.30f + 0.70f * ghost);
-        const float tailPulse = tailState * (0.35f + 0.65f * ghost);
+        const float attackPulse = transient * ghost * (0.35f + 0.95f * attack);
+        const float bodyPulse = bodyState * ghost * (0.30f + 0.70f * body);
+        const float tailPulse = tailState * ghost * (0.35f + 0.65f * tail);
 
         const float transientBoost =
             1.0f + attack * attackPulse * 0.72f;
