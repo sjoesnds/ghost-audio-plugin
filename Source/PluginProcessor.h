@@ -1,6 +1,6 @@
 #pragma once
-
 #include <JuceHeader.h>
+#include <atomic>
 
 class GHOSTAudioProcessor final : public juce::AudioProcessor
 {
@@ -10,7 +10,7 @@ public:
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
-    bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
+    bool isBusesLayoutSupported(const BusesLayout&) const override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
@@ -32,18 +32,27 @@ public:
     void setStateInformation(const void*, int) override;
 
     juce::AudioProcessorValueTreeState& getAPVTS() noexcept { return apvts; }
+    float getTransientMeter() const noexcept { return transientMeter.load(); }
+    float getBodyMeter() const noexcept { return bodyMeter.load(); }
+    float getTailMeter() const noexcept { return tailMeter.load(); }
+    float getGhostMeter() const noexcept { return ghostMeter.load(); }
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 private:
     juce::AudioProcessorValueTreeState apvts;
-
     double currentSampleRate = 44100.0;
-    float envelope = 0.0f;
-    float widthState = 0.0f;
 
-    float attackCoeff = 0.0f;
-    float releaseCoeff = 0.0f;
+    float fastEnvelope = 0.0f, slowEnvelope = 0.0f, previousEnvelope = 0.0f;
+    float lowpassL = 0.0f, lowpassR = 0.0f;
+    float fastAttackCoeff = 0.0f, fastReleaseCoeff = 0.0f;
+    float slowAttackCoeff = 0.0f, slowReleaseCoeff = 0.0f;
+    float toneCoeff = 0.0f;
+
+    std::atomic<float> transientMeter { 0.0f };
+    std::atomic<float> bodyMeter { 0.0f };
+    std::atomic<float> tailMeter { 0.0f };
+    std::atomic<float> ghostMeter { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GHOSTAudioProcessor)
 };
