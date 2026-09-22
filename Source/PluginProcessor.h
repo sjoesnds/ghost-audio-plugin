@@ -46,6 +46,14 @@ private:
 
     float fastEnvelope = 0.0f, slowEnvelope = 0.0f, previousEnvelope = 0.0f;
     float ghostState = 0.0f;
+
+    static constexpr int numBands = 6;
+    std::array<juce::dsp::IIR::Filter<float>, numBands> bandL;
+    std::array<juce::dsp::IIR::Filter<float>, numBands> bandR;
+    std::array<float, numBands> bandEnvelope {};
+    std::array<float, numBands> bandGain {};
+    int dominantBand = 0;
+
     float bodyL = 0.0f, bodyR = 0.0f;
     float toneL = 0.0f, toneR = 0.0f;
     float fastAttackCoeff = 0.0f, fastReleaseCoeff = 0.0f;
@@ -54,6 +62,10 @@ private:
     float toneCoeff = 0.0f;
     float ghostRiseCoeff = 0.0f;
     float ghostFallCoeff = 0.0f;
+    float bandAttackCoeff = 0.0f;
+    float bandReleaseCoeff = 0.0f;
+    float bandGainAttackCoeff = 0.0f;
+    float bandGainReleaseCoeff = 0.0f;
 
     std::atomic<float> transientMeter { 0.0f };
     std::atomic<float> bodyMeter { 0.0f };
