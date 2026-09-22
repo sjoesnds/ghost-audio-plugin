@@ -20,7 +20,7 @@ private:
 
     juce::Slider ghostSlider, attackSlider, bodySlider, tailSlider;
     juce::Slider widthSlider, airSlider, smoothSlider, mixSlider;
-    juce::Label title, subtitle;
+    juce::Label title, subtitle, versionLabel;
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     std::unique_ptr<SliderAttachment> ghostAttachment, attackAttachment;
