@@ -31,13 +31,13 @@ GHOSTAudioProcessorEditor::GHOSTAudioProcessorEditor(GHOSTAudioProcessor& p)
         addAndMakeVisible(*s);
 
     title.setText("GHOST", juce::dontSendNotification);
-    title.setFont(juce::Font(30.0f, juce::Font::bold));
+    title.setFont(juce::Font(juce::FontOptions{}.withHeight(30.0f).withStyle(juce::Font::bold)));
     title.setColour(juce::Label::textColourId, text);
     title.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(title);
 
     subtitle.setText("DYNAMIC SHADOW ENGINE", juce::dontSendNotification);
-    subtitle.setFont(juce::Font(10.0f, juce::Font::bold));
+    subtitle.setFont(juce::Font(juce::FontOptions{}.withHeight(10.0f).withStyle(juce::Font::bold)));
     subtitle.setColour(juce::Label::textColourId, muted);
     subtitle.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(subtitle);
