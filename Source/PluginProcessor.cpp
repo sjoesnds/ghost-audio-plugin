@@ -65,6 +65,7 @@ void GHOSTAudioProcessor::prepareToPlay(double sr, int)
     currentSampleRate = juce::jmax(8000.0, sr);
 
     fastEnvelope = slowEnvelope = previousEnvelope = 0.0f;
+    ghostState = 0.0f;
     bodyL = bodyR = toneL = toneR = 0.0f;
 
     fastAttackCoeff = coeff(2.5f, currentSampleRate);
@@ -74,6 +75,8 @@ void GHOSTAudioProcessor::prepareToPlay(double sr, int)
 
     bodyCoeff = alpha(650.0f, currentSampleRate);
     toneCoeff = alpha(2200.0f, currentSampleRate);
+    ghostRiseCoeff = coeff(7.0f, currentSampleRate);
+    ghostFallCoeff = coeff(180.0f, currentSampleRate);
 
     transientMeter.store(0.0f);
     bodyMeter.store(0.0f);
@@ -158,11 +161,22 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
 
         previousEnvelope = fastEnvelope;
 
-        const float motion = juce::jlimit(
+        const float targetMotion = juce::jlimit(
             0.0f, 1.0f,
-            0.58f * transient
-            + 0.24f * body * bodyState
-            + 0.30f * tail * tailState) * (0.10f + 0.90f * ghost);
+            0.52f * transient
+            + 0.20f * body * bodyState
+            + 0.34f * tail * tailState);
+
+        const float ghostTarget = targetMotion * (0.12f + 0.88f * ghost);
+
+        if (ghostTarget > ghostState)
+            ghostState = ghostRiseCoeff * ghostState
+                       + (1.0f - ghostRiseCoeff) * ghostTarget;
+        else
+            ghostState = ghostFallCoeff * ghostState
+                       + (1.0f - ghostFallCoeff) * ghostTarget;
+
+        const float motion = juce::jlimit(0.0f, 1.0f, ghostState);
 
         peakT = juce::jmax(peakT, transient);
         peakB = juce::jmax(peakB, bodyState);
@@ -182,18 +196,22 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
         const float highL = inL - toneL;
         const float highR = inR - toneR;
 
+        const float attackPulse = transient * (0.45f + 0.95f * ghost);
+        const float bodyPulse = bodyState * (0.30f + 0.70f * ghost);
+        const float tailPulse = tailState * (0.35f + 0.65f * ghost);
+
         const float transientBoost =
-            1.0f + attack * ghost * transient * 1.35f;
+            1.0f + attack * attackPulse * 1.45f;
 
         const float bodyBoost =
-            1.0f + body * ghost * bodyState * 0.38f;
+            1.0f + body * bodyPulse * 0.42f;
 
         const float tailCut =
-            1.0f - tail * ghost * tailState * 0.42f;
+            1.0f - tail * tailPulse * 0.48f;
 
         const float airBoost =
-            1.0f + air * ghost * transient * 1.80f
-                  - air * ghost * tailState * 0.35f;
+            1.0f + air * attackPulse * 2.10f
+                  - air * tailPulse * 0.45f;
 
         const float lowLProcessed = lowL * bodyBoost;
         const float lowRProcessed = lowR * bodyBoost;
@@ -211,9 +229,9 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
 
             // GHOST opens on attacks and gently collapses during the tail.
             const float widthFactor = juce::jlimit(
-                0.60f, 2.20f,
-                1.0f + width * ghost
-                    * (1.55f * transient - 0.75f * tailState));
+                0.55f, 2.35f,
+                1.0f + width * (0.25f + 0.75f * ghostState)
+                    * (1.70f * transient - 0.90f * tailState));
 
             const float outL =
                 mid + sideLow
@@ -229,9 +247,10 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
 
             // Tiny dynamic saturation prevents the ghost response from feeling like
             // a static EQ move when the source has strong transient energy.
-            const float drive = 1.0f + 1.10f * ghost * transient;
-            const float wetL = std::tanh(outL * drive) / std::tanh(drive);
-            const float wetR = std::tanh(outR * drive) / std::tanh(drive);
+            const float drive = 1.0f + 1.35f * ghostState * transient;
+            const float normalizer = std::tanh(drive);
+            const float wetL = std::tanh(outL * drive) / normalizer;
+            const float wetR = std::tanh(outR * drive) / normalizer;
 
             b.setSample(0, n, clampDenormal(inL + (wetL - inL) * mix));
             b.setSample(1, n, clampDenormal(inR + (wetR - inR) * mix));
@@ -243,7 +262,7 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
                 + 0.85f * midLProcessed
                 + highLProcessed;
 
-            const float drive = 1.0f + 1.10f * ghost * transient;
+            const float drive = 1.0f + 1.35f * ghostState * transient;
             const float wet = std::tanh(out * drive) / std::tanh(drive);
 
             b.setSample(0, n, clampDenormal(inL + (wet - inL) * mix));
