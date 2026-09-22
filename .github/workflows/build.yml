@@ -8,9 +8,21 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Configure
         run: cmake -B build
+
       - name: Build
         run: cmake --build build --config Release --parallel
+
+      - name: Upload VST3 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GHOST-VST3
+          path: build/GHOST_artefacts/Release/VST3/GHOST.vst3
+          if-no-files-found: error
+          retention-days: 14
