@@ -88,23 +88,32 @@ void GHOSTAudioProcessor::prepareToPlay(double sr, int)
     haloAttackCoeff = coeff(1.5f, currentSampleRate);
     haloReleaseCoeff = coeff(95.0f, currentSampleRate);
 
-    ghostDelaySamples = juce::jmax(1, juce::roundToInt(0.011f * static_cast<float>(currentSampleRate)));
+    ghostShortDelaySamples = juce::jmax(
+        1, juce::roundToInt(0.0065f * static_cast<float>(currentSampleRate)));
+    ghostLongDelaySamples = juce::jmax(
+        2, juce::roundToInt(0.0175f * static_cast<float>(currentSampleRate)));
+
     const juce::dsp::ProcessSpec delaySpec {
         currentSampleRate,
         512,
         1
     };
 
-    ghostDelayL.setMaximumDelayInSamples(
-        juce::jmax(4, juce::roundToInt(0.025f * static_cast<float>(currentSampleRate))));
-    ghostDelayR.setMaximumDelayInSamples(
-        juce::jmax(4, juce::roundToInt(0.025f * static_cast<float>(currentSampleRate))));
-    ghostDelayL.prepare(delaySpec);
-    ghostDelayR.prepare(delaySpec);
-    ghostDelayL.setDelay(static_cast<float>(ghostDelaySamples));
-    ghostDelayR.setDelay(static_cast<float>(ghostDelaySamples));
-    ghostDelayL.reset();
-    ghostDelayR.reset();
+    const int maxDelaySamples = juce::jmax(
+        8, juce::roundToInt(0.030f * static_cast<float>(currentSampleRate)));
+
+    for (auto* delay : { &ghostDelayShortL, &ghostDelayShortR,
+                         &ghostDelayLongL, &ghostDelayLongR })
+    {
+        delay->setMaximumDelayInSamples(maxDelaySamples);
+        delay->prepare(delaySpec);
+        delay->reset();
+    }
+
+    ghostDelayShortL.setDelay(static_cast<float>(ghostShortDelaySamples));
+    ghostDelayShortR.setDelay(static_cast<float>(ghostShortDelaySamples));
+    ghostDelayLongL.setDelay(static_cast<float>(ghostLongDelaySamples));
+    ghostDelayLongR.setDelay(static_cast<float>(ghostLongDelaySamples));
 
     const float bandFrequencies[numBands] = { 90.0f, 240.0f, 600.0f,
                                                1500.0f, 3400.0f, 7600.0f };
@@ -345,18 +354,26 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
         }
 
         // -----------------------------------------------------------------------------
-        // THE GHOST HALO
-        // A short, filtered shadow follows strong events. It is deliberately
-        // different from the dry signal's timing, so the ear perceives a wider
-        // and more spatial event without simply making the source louder.
-        const float delaySourceL = highL;
-        const float delaySourceR = highR;
+        // THE GHOST HALO v2
+        // Two asymmetric micro-reflections create a spatial "shadow" that can
+        // briefly detach from the source instead of behaving like a plain EQ move.
+        const float shadowInputL = 0.58f * highL + 0.42f * midL;
+        const float shadowInputR = 0.58f * highR + 0.42f * midR;
 
-        ghostDelayL.pushSample(0, delaySourceL);
-        ghostDelayR.pushSample(0, delaySourceR);
+        ghostDelayShortL.pushSample(0, shadowInputL);
+        ghostDelayShortR.pushSample(0, shadowInputR);
+        ghostDelayLongL.pushSample(0, shadowInputL);
+        ghostDelayLongR.pushSample(0, shadowInputR);
 
-        const float delayedL = ghostDelayL.popSample(0);
-        const float delayedR = ghostDelayR.popSample(0);
+        const float shortL = ghostDelayShortL.popSample(0);
+        const float shortR = ghostDelayShortR.popSample(0);
+        const float longL = ghostDelayLongL.popSample(0);
+        const float longR = ghostDelayLongR.popSample(0);
+
+        // Cross-feed the later tap so the reflection is not locked to the
+        // exact same stereo position as the original event.
+        const float ghostReflectionL = 0.82f * shortL + 0.30f * longR;
+        const float ghostReflectionR = 0.82f * shortR + 0.30f * longL;
 
         const float haloTarget = juce::jlimit(
             0.0f, 1.0f,
@@ -378,7 +395,7 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
                        + (1.0f - haloReleaseCoeff) * haloTarget;
 
         const float haloState = 0.5f * (ghostHaloL + ghostHaloR);
-        const float haloAmount = width * ghost * 0.48f * haloState;
+        const float haloAmount = width * ghost * 0.66f * haloState;
 
         // -----------------------------------------------------------------------------
         // Perceptual spectral contrast
@@ -434,7 +451,7 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
                 + sideMid * widthFactor
                 + highLProcessed
                 + spectralDeltaL
-                + delayedL * haloAmount;
+                + ghostReflectionL * haloAmount;
 
             const float outR =
                 mid - sideLow
@@ -442,7 +459,7 @@ void GHOSTAudioProcessor::processBlock(juce::AudioBuffer<float>& b,
                 - sideMid * widthFactor
                 + highRProcessed
                 + spectralDeltaR
-                - delayedR * haloAmount;
+                + ghostReflectionR * haloAmount;
 
             // Tiny dynamic saturation prevents the ghost response from feeling like
             // a static EQ move when the source has strong transient energy.
