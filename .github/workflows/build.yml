@@ -23,6 +23,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: GHOST-VST3
-          path: build/GHOST_artefacts/Release/VST3/GHOST.vst3
+          path: build/GHOST_artefacts/Release/VST3
           if-no-files-found: error
           retention-days: 14
