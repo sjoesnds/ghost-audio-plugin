@@ -36,6 +36,7 @@ public:
     float getBodyMeter() const noexcept { return bodyMeter.load(); }
     float getTailMeter() const noexcept { return tailMeter.load(); }
     float getGhostMeter() const noexcept { return ghostMeter.load(); }
+    float getGhostState() const noexcept { return ghostState; }
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -44,12 +45,15 @@ private:
     double currentSampleRate = 44100.0;
 
     float fastEnvelope = 0.0f, slowEnvelope = 0.0f, previousEnvelope = 0.0f;
+    float ghostState = 0.0f;
     float bodyL = 0.0f, bodyR = 0.0f;
     float toneL = 0.0f, toneR = 0.0f;
     float fastAttackCoeff = 0.0f, fastReleaseCoeff = 0.0f;
     float slowAttackCoeff = 0.0f, slowReleaseCoeff = 0.0f;
     float bodyCoeff = 0.0f;
     float toneCoeff = 0.0f;
+    float ghostRiseCoeff = 0.0f;
+    float ghostFallCoeff = 0.0f;
 
     std::atomic<float> transientMeter { 0.0f };
     std::atomic<float> bodyMeter { 0.0f };
