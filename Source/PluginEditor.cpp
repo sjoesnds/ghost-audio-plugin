@@ -8,6 +8,7 @@ namespace
     const auto text = juce::Colour::fromRGB(228, 230, 236);
     const auto muted = juce::Colour::fromRGB(110, 115, 128);
     const auto ghost = juce::Colour::fromRGB(181, 187, 202);
+    const auto version = juce::Colour::fromRGB(98, 103, 116);
 }
 
 GHOSTAudioProcessorEditor::GHOSTAudioProcessorEditor(GHOSTAudioProcessor& p)
@@ -36,11 +37,17 @@ GHOSTAudioProcessorEditor::GHOSTAudioProcessorEditor(GHOSTAudioProcessor& p)
     title.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(title);
 
-    subtitle.setText("DYNAMIC SHADOW ENGINE", juce::dontSendNotification);
+    subtitle.setText("TRANSIENT HALO ENGINE", juce::dontSendNotification);
     subtitle.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
     subtitle.setColour(juce::Label::textColourId, muted);
     subtitle.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(subtitle);
+
+    versionLabel.setText("v0.5.0", juce::dontSendNotification);
+    versionLabel.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+    versionLabel.setColour(juce::Label::textColourId, version);
+    versionLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(versionLabel);
 
     auto& state = processor.getAPVTS();
     ghostAttachment = std::make_unique<SliderAttachment>(state, "ghostAmount", ghostSlider);
@@ -81,7 +88,11 @@ void GHOSTAudioProcessorEditor::paint(juce::Graphics& g)
 
     auto header = root.removeFromTop(62);
     title.setBounds(header.removeFromTop(38).reduced(20, 0));
-    subtitle.setBounds(header.reduced(22, 0));
+
+    auto meta = header.reduced(22, 0);
+    auto versionArea = meta.removeFromRight(72);
+    subtitle.setBounds(meta);
+    versionLabel.setBounds(versionArea);
 
     auto display = root.removeFromTop(226).reduced(20, 8);
     g.setColour(juce::Colour::fromRGB(10, 12, 16));
