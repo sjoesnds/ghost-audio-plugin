@@ -54,6 +54,14 @@ private:
     std::array<float, numBands> bandGain {};
     int dominantBand = 0;
 
+    juce::dsp::DelayLine<float> ghostDelayL;
+    juce::dsp::DelayLine<float> ghostDelayR;
+    int ghostDelaySamples = 1;
+    float ghostHaloL = 0.0f;
+    float ghostHaloR = 0.0f;
+    float haloAttackCoeff = 0.0f;
+    float haloReleaseCoeff = 0.0f;
+
     float bodyL = 0.0f, bodyR = 0.0f;
     float toneL = 0.0f, toneR = 0.0f;
     float fastAttackCoeff = 0.0f, fastReleaseCoeff = 0.0f;
