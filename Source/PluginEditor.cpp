@@ -31,7 +31,7 @@ GHOSTAudioProcessorEditor::GHOSTAudioProcessorEditor(GHOSTAudioProcessor& p)
                      &widthSlider, &airSlider, &smoothSlider, &mixSlider })
         addAndMakeVisible(*s);
 
-    title.setText("GHOST", juce::dontSendNotification);
+    title.setText("GHOST   //   v0.5.1", juce::dontSendNotification);
     title.setFont(juce::Font(juce::FontOptions(30.0f, juce::Font::bold)));
     title.setColour(juce::Label::textColourId, text);
     title.setJustificationType(juce::Justification::centredLeft);
@@ -43,7 +43,7 @@ GHOSTAudioProcessorEditor::GHOSTAudioProcessorEditor(GHOSTAudioProcessor& p)
     subtitle.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(subtitle);
 
-    versionLabel.setText("v0.5.0", juce::dontSendNotification);
+    versionLabel.setText("0.5.1", juce::dontSendNotification);
     versionLabel.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
     versionLabel.setColour(juce::Label::textColourId, version);
     versionLabel.setJustificationType(juce::Justification::centredRight);
