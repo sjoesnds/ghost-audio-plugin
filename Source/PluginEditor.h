@@ -1,5 +1,4 @@
 #pragma once
-
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 
@@ -15,26 +14,19 @@ public:
 
 private:
     void timerCallback() override;
+    void setupSlider(juce::Slider&);
 
     GHOSTAudioProcessor& processor;
 
-    juce::Slider ghostSlider;
-    juce::Slider attackSlider;
-    juce::Slider tailSlider;
-    juce::Slider widthSlider;
-    juce::Slider mixSlider;
+    juce::Slider ghostSlider, attackSlider, bodySlider, tailSlider;
+    juce::Slider widthSlider, airSlider, smoothSlider, mixSlider;
+    juce::Label title, subtitle;
 
-    juce::Label title;
-    juce::Label status;
-
-    using SliderAttachment =
-        juce::AudioProcessorValueTreeState::SliderAttachment;
-
-    std::unique_ptr<SliderAttachment> ghostAttachment;
-    std::unique_ptr<SliderAttachment> attackAttachment;
-    std::unique_ptr<SliderAttachment> tailAttachment;
-    std::unique_ptr<SliderAttachment> widthAttachment;
-    std::unique_ptr<SliderAttachment> mixAttachment;
+    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
+    std::unique_ptr<SliderAttachment> ghostAttachment, attackAttachment;
+    std::unique_ptr<SliderAttachment> bodyAttachment, tailAttachment;
+    std::unique_ptr<SliderAttachment> widthAttachment, airAttachment;
+    std::unique_ptr<SliderAttachment> smoothAttachment, mixAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GHOSTAudioProcessorEditor)
 };
